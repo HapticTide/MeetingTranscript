@@ -1,24 +1,100 @@
-# Meeting Transcript API
+# Meeting Transcript API 部署说明
 
-本项目是一个本地会议音频转录 API 服务。当前支持上传、任务状态查询、结果导出和 zip 下载能力；ASR backend 可使用 `mlx-whisper`，说话人分离可选接入 `pyannote.audio`。
+这是一个本地会议音频转录 API 服务，支持上传一个或多个音频文件，离线生成 `txt`、`md`、`json`、`srt` 结果，并可选使用 `pyannote.audio` 做说话人分离。
 
-## 当前能力
+## 运行环境
 
-- 上传一个或多个音频文件
-- 返回 `job_id`
-- 查询任务进度
-- 查询每个文件状态
-- 导出 `txt`、`md`、`json`、`srt`
-- 下载结果 zip 包
-- 通过配置预留 ASR 和 speaker diarization backend
+推荐环境：
 
-## 本地启动
+- macOS + Apple Silicon
+- Python 3.12
+- Homebrew
+- `ffmpeg`
+- Hugging Face 账号与 read token
+
+当前 Mac 推荐 backend：
+
+- ASR：`mlx-whisper`
+- Speaker diarization：`pyannote.audio`
+
+## 安装系统依赖
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip setuptools wheel
-.venv/bin/python -m pip install -e '.[dev,asr]'
-.venv/bin/uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+brew install ffmpeg python@3.12
+```
+
+确认安装：
+
+```bash
+ffmpeg -version
+/opt/homebrew/bin/python3.12 --version
+```
+
+## 创建 Python 环境
+
+```bash
+/opt/homebrew/bin/python3.12 -m venv .venv312
+.venv312/bin/python -m pip install --upgrade pip setuptools wheel
+.venv312/bin/python -m pip install -e '.[dev,asr,diarization]'
+```
+
+如果只需要文字转录、不需要说话人分离，可只安装：
+
+```bash
+.venv312/bin/python -m pip install -e '.[dev,asr]'
+```
+
+## Hugging Face 登录
+
+`pyannote.audio` 需要访问 Hugging Face gated model。先在网页接受模型条款：
+
+- `pyannote/speaker-diarization-community-1`
+
+然后登录：
+
+```bash
+.venv312/bin/hf auth login
+.venv312/bin/hf auth whoami
+```
+
+不要把 token 写进 Git 仓库。
+
+## 配置服务
+
+复制配置模板：
+
+```bash
+cp .env.example .env
+```
+
+只做 ASR：
+
+```env
+MEETING_TRANSCRIPT_ASR_BACKEND=mlx_whisper
+MEETING_TRANSCRIPT_DIARIZATION_BACKEND=none
+MEETING_TRANSCRIPT_ASR_MODEL=mlx-community/whisper-large-v3-turbo
+MEETING_TRANSCRIPT_ASR_LANGUAGE=zh
+```
+
+启用说话人分离：
+
+```env
+MEETING_TRANSCRIPT_DIARIZATION_BACKEND=pyannote
+MEETING_TRANSCRIPT_PYANNOTE_MODEL=pyannote/speaker-diarization-community-1
+MEETING_TRANSCRIPT_MIN_SPEAKERS=2
+MEETING_TRANSCRIPT_MAX_SPEAKERS=8
+```
+
+## 启动服务
+
+```bash
+VENV_DIR=.venv312 ./scripts/dev-start.sh
+```
+
+默认监听：
+
+```text
+http://127.0.0.1:8000
 ```
 
 健康检查：
@@ -27,25 +103,19 @@ python3 -m venv .venv
 curl http://127.0.0.1:8000/health
 ```
 
-## API 示例
+## API 使用
 
 上传音频：
 
 ```bash
 curl -X POST http://127.0.0.1:8000/transcriptions \
-  -F "files=@/path/to/meeting.wav" \
-  -F "files=@/path/to/another.m4a"
+  -F "files=@/path/to/meeting.m4a"
 ```
 
-查询进度：
+查询任务：
 
 ```bash
 curl http://127.0.0.1:8000/jobs/{job_id}
-```
-
-查询文件状态：
-
-```bash
 curl http://127.0.0.1:8000/jobs/{job_id}/files
 ```
 
@@ -61,35 +131,47 @@ curl http://127.0.0.1:8000/jobs/{job_id}/result
 curl -L http://127.0.0.1:8000/jobs/{job_id}/result.zip -o result.zip
 ```
 
-## 目录结构
+## 数据目录
+
+运行数据默认写入 `data/`：
 
 ```text
-app/
-  main.py            FastAPI 路由
-  storage.py         上传文件、任务 JSON、结果文件持久化
-  processor.py       任务处理状态机
-  transcription.py   ASR / diarization backend 入口
-  exporters.py       txt / md / json / srt 导出
-  models.py          API 和任务模型
-data/
-  uploads/           原始上传文件
-  jobs/              任务状态 JSON
-  results/           转录结果
+data/uploads/   原始上传文件
+data/jobs/      任务状态 JSON
+data/results/   txt、md、json、srt 结果
 ```
 
-## 后续接真实模型
-
-当前 `app/transcription.py` 的 `TranscriptionPipeline` 已支持：
-
-- `ASR_BACKEND=mock`
-- `ASR_BACKEND=mlx_whisper`
-- `DIARIZATION_BACKEND=none`
-- `DIARIZATION_BACKEND=pyannote`
-
-默认建议先使用 `mlx_whisper + none` 跑通真实中文转录；确认速度和质量后再启用 `pyannote` 做 speaker diarization。
+这些目录是本地运行产物，不应提交。
 
 ## 测试
 
 ```bash
-.venv/bin/python -m pytest -q
+.venv312/bin/python -m pytest -q
 ```
+
+单元测试会 mock 大模型路径，避免测试阶段下载模型或依赖 Metal GPU。
+
+## 常见问题
+
+### pyannote 提示 401 Unauthorized
+
+确认已完成：
+
+1. 在 Hugging Face 网页接受模型条款
+2. `.venv312/bin/hf auth login`
+3. 不要覆盖 `XDG_CACHE_HOME` 导致 SDK 读不到默认 token
+
+### 普通 shell 中 MLX 提示 No Metal device
+
+`mlx-whisper` 需要访问 Metal。若在受限或 headless 环境报错，请在正常 macOS 终端启动服务。
+
+### 说话人数量不符合预期
+
+调整：
+
+```env
+MEETING_TRANSCRIPT_MIN_SPEAKERS=5
+MEETING_TRANSCRIPT_MAX_SPEAKERS=8
+```
+
+然后重启服务并重新转录。
