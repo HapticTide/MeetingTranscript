@@ -1,0 +1,39 @@
+[project]
+name = "meeting-transcript"
+version = "0.1.0"
+description = "Local API service for meeting audio transcription and speaker diarization."
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "python-multipart>=0.0.9",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.27.0",
+    "pytest>=8.2.0",
+]
+asr = [
+    "mlx-whisper>=0.4.0",
+]
+diarization = [
+    "pyannote.audio>=3.3.0",
+]
+real = [
+    "mlx-whisper>=0.4.0",
+    "pyannote.audio>=3.3.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
