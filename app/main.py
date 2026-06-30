@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 
 from app.config import build_settings
 from app.models import CreateJobResponse, Job, JobResult
@@ -39,6 +39,10 @@ def create_app(
     app.state.settings = settings
     app.state.storage = storage
     app.state.processor = processor
+
+    @app.get("/", response_class=FileResponse)
+    def index() -> FileResponse:
+        return FileResponse(Path("static/index.html"), media_type="text/html")
 
     @app.get("/health")
     def health() -> dict:
@@ -98,9 +102,29 @@ def create_app(
 
         return JobResult(
             job_id=job.job_id,
+            elapsed_seconds=job.elapsed_seconds,
             files=job.files,
             artifacts=storage.result_artifacts(job_id),
         )
+
+    @app.get("/jobs/{job_id}/result/text", response_class=PlainTextResponse)
+    def get_job_text_result(job_id: str) -> str:
+        try:
+            job = storage.load_job(job_id)
+        except FileNotFoundError as error:
+            raise HTTPException(status_code=404, detail="Job not found.") from error
+
+        if job.status.value != "completed":
+            raise HTTPException(status_code=409, detail="Job is not completed.")
+
+        parts = []
+        for job_file in job.files:
+            if job_file.outputs.text is None:
+                continue
+            text_path = Path(job_file.outputs.text)
+            if text_path.exists():
+                parts.append(text_path.read_text())
+        return "\n".join(parts)
 
     @app.get("/jobs/{job_id}/result.zip")
     def download_job_result(job_id: str) -> FileResponse:

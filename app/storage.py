@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List
 from uuid import uuid4
@@ -47,7 +48,12 @@ class JobStorage:
             upload.file.seek(0)
             job_files.append(JobFile(filename=stored_path.name, stored_path=str(stored_path)))
 
-        job = Job(job_id=job_id, total_files=len(job_files), files=job_files)
+        job = Job(
+            job_id=job_id,
+            total_files=len(job_files),
+            created_at=datetime.now(timezone.utc).isoformat(),
+            files=job_files,
+        )
         self.save_job(job)
         return job
 

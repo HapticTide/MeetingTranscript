@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Meeting Transcript</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #1f2937;
+        background: #f5f7fb;
+      }
+
+      body {
+        margin: 0;
+        padding: 32px;
+      }
+
+      main {
+        max-width: 1280px;
+        margin: 0 auto;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 28px;
+      }
+
+      .panel {
+        margin-top: 20px;
+        padding: 20px;
+        background: #ffffff;
+        border: 1px solid #d9e0ea;
+        border-radius: 8px;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 340px;
+        gap: 20px;
+        align-items: start;
+      }
+
+      .workspace {
+        min-width: 0;
+      }
+
+      .sidebar {
+        position: sticky;
+        top: 24px;
+        max-height: calc(100vh - 48px);
+        overflow: auto;
+      }
+
+      .row {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      input[type="file"] {
+        min-width: 280px;
+      }
+
+      button,
+      a.button {
+        border: 0;
+        border-radius: 6px;
+        background: #2563eb;
+        color: white;
+        padding: 10px 14px;
+        font-weight: 600;
+        cursor: pointer;
+        text-decoration: none;
+      }
+
+      button:disabled {
+        background: #9ca3af;
+        cursor: not-allowed;
+      }
+
+      progress {
+        width: 220px;
+        height: 14px;
+      }
+
+      pre {
+        min-height: 280px;
+        max-height: 520px;
+        overflow: auto;
+        padding: 16px;
+        border-radius: 6px;
+        background: #111827;
+        color: #e5e7eb;
+        white-space: pre-wrap;
+        line-height: 1.55;
+      }
+
+      .muted {
+        color: #64748b;
+      }
+
+      .error {
+        color: #b91c1c;
+      }
+
+      .history-list {
+        display: grid;
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      .history-item {
+        display: grid;
+        gap: 4px;
+        width: 100%;
+        border: 1px solid #d9e0ea;
+        border-radius: 6px;
+        background: #f8fafc;
+        color: #1f2937;
+        padding: 10px 12px;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .history-item.active {
+        border-color: #2563eb;
+        background: #eff6ff;
+      }
+
+      .history-item strong,
+      .history-item span {
+        overflow-wrap: anywhere;
+      }
+
+      @media (max-width: 900px) {
+        body {
+          padding: 18px;
+        }
+
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          position: static;
+          max-height: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Meeting Transcript</h1>
+      <p class="muted">上传会议音频，等待本地服务生成转录文本和结果包。</p>
+
+      <div class="layout">
+        <div class="workspace">
+          <section class="panel">
+            <form id="uploadForm">
+              <div class="row">
+                <input id="files" name="files" type="file" accept="audio/*,.m4a,.mp3,.wav,.webm,.flac" multiple required />
+                <button id="submitButton" type="submit">上传并转录</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="panel">
+            <div class="row">
+              <strong id="statusText">等待上传</strong>
+              <progress id="progress" value="0" max="100"></progress>
+              <span id="progressText" class="muted">0%</span>
+              <span id="elapsedText" class="muted">耗时：-</span>
+              <span id="jobId" class="muted"></span>
+              <a id="downloadLink" class="button" href="#" hidden>下载结果包</a>
+            </div>
+            <p id="currentStepText" class="muted">当前步骤：-</p>
+            <p id="message" class="muted"></p>
+          </section>
+
+          <section class="panel">
+            <h2>转录结果</h2>
+            <pre id="resultText">完成后会在这里显示纯文本结果。</pre>
+          </section>
+        </div>
+
+        <aside class="sidebar panel">
+          <div class="row">
+            <h2>历史任务</h2>
+          </div>
+          <div id="historyList" class="history-list">
+            <p class="muted">暂无历史任务。</p>
+          </div>
+        </aside>
+      </div>
+    </main>
+
+    <script>
+      const form = document.querySelector("#uploadForm");
+      const fileInput = document.querySelector("#files");
+      const submitButton = document.querySelector("#submitButton");
+      const statusText = document.querySelector("#statusText");
+      const progress = document.querySelector("#progress");
+      const progressText = document.querySelector("#progressText");
+      const elapsedText = document.querySelector("#elapsedText");
+      const jobIdLabel = document.querySelector("#jobId");
+      const currentStepText = document.querySelector("#currentStepText");
+      const message = document.querySelector("#message");
+      const resultText = document.querySelector("#resultText");
+      const downloadLink = document.querySelector("#downloadLink");
+      const historyList = document.querySelector("#historyList");
+
+      const historyKey = "meetingTranscriptJobs";
+      let pollTimer = null;
+      let activeJobId = null;
+      let activeStartedAt = null;
+      const pollIntervalMs = 1000;
+
+      function setMessage(text, isError = false) {
+        message.textContent = text;
+        message.className = isError ? "error" : "muted";
+      }
+
+      function stageLabel(stage) {
+        const labels = {
+          queued: "排队中",
+          processing: "处理中",
+          normalizing_audio: "音频预处理",
+          transcribing_audio: "语音识别",
+          diarizing_speakers: "说话人分离",
+          assigning_speakers: "合并说话人",
+          exporting: "导出结果",
+          completed: "已完成",
+          failed: "失败",
+        };
+        return labels[stage] || stage;
+      }
+
+      function formatElapsed(seconds) {
+        if (seconds === null || seconds === undefined) {
+          return "-";
+        }
+        const total = Math.max(0, Math.round(seconds));
+        const minutes = Math.floor(total / 60);
+        const remainingSeconds = total % 60;
+        if (minutes === 0) {
+          return `${remainingSeconds} 秒`;
+        }
+        return `${minutes} 分 ${remainingSeconds} 秒`;
+      }
+
+      function currentElapsedSeconds(job) {
+        if (job.elapsed_seconds !== null && job.elapsed_seconds !== undefined) {
+          return job.elapsed_seconds;
+        }
+        if (!job.started_at) {
+          return null;
+        }
+        return (Date.now() - new Date(job.started_at).getTime()) / 1000;
+      }
+
+      function loadHistory() {
+        try {
+          return JSON.parse(localStorage.getItem(historyKey) || "[]");
+        } catch {
+          return [];
+        }
+      }
+
+      function saveHistory(items) {
+        localStorage.setItem(historyKey, JSON.stringify(items.slice(0, 20)));
+      }
+
+      function rememberJob(jobId, files) {
+        const fileNames = Array.from(files).map((file) => file.name);
+        const history = loadHistory().filter((item) => item.job_id !== jobId);
+        history.unshift({
+          job_id: jobId,
+          files: fileNames,
+          created_at: new Date().toISOString(),
+        });
+        saveHistory(history);
+        activeJobId = jobId;
+        renderHistory();
+      }
+
+      function renderHistory() {
+        const history = loadHistory();
+        historyList.innerHTML = "";
+
+        if (!history.length) {
+          const empty = document.createElement("p");
+          empty.className = "muted";
+          empty.textContent = "暂无历史任务。";
+          historyList.appendChild(empty);
+          return;
+        }
+
+        for (const item of history) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = item.job_id === activeJobId ? "history-item active" : "history-item";
+          button.innerHTML = `
+            <strong>${item.files.join(", ") || "未命名任务"}</strong>
+            <span class="muted">job_id: ${item.job_id}</span>
+            <span class="muted">${new Date(item.created_at).toLocaleString()}</span>
+          `;
+          button.addEventListener("click", () => resumeJob(item.job_id));
+          historyList.appendChild(button);
+        }
+      }
+
+      async function resumeJob(jobId) {
+        clearInterval(pollTimer);
+        activeJobId = jobId;
+        renderHistory();
+        submitButton.disabled = false;
+        downloadLink.hidden = true;
+        resultText.textContent = "正在查询历史任务...";
+        jobIdLabel.textContent = `job_id: ${jobId}`;
+        setMessage("正在查询历史任务状态...");
+        await pollJob(jobId);
+      }
+
+      async function pollJob(jobId) {
+        const response = await fetch(`/jobs/${jobId}`);
+        if (!response.ok) {
+          throw new Error(`查询任务失败：${response.status}`);
+        }
+
+        const job = await response.json();
+        const percent = job.progress || 0;
+        statusText.textContent = `${job.status} / ${stageLabel(job.stage)}`;
+        progress.value = job.progress || 0;
+        progressText.textContent = `${percent}%`;
+        activeStartedAt = job.started_at || activeStartedAt;
+        elapsedText.textContent = `耗时：${formatElapsed(currentElapsedSeconds(job))}`;
+        currentStepText.textContent = `当前步骤：${stageLabel(job.stage)}${job.current_file ? ` / ${job.current_file}` : ""}`;
+
+        if (job.current_file) {
+          setMessage(`正在处理：${job.current_file}`);
+        } else if (job.status === "queued" || job.status === "running") {
+          setMessage("任务正在处理，可切换查看其他历史任务。");
+        }
+
+        if (job.status === "completed") {
+          clearInterval(pollTimer);
+          pollTimer = null;
+          submitButton.disabled = false;
+          downloadLink.href = `/jobs/${jobId}/result.zip`;
+          downloadLink.hidden = false;
+          const textResponse = await fetch(`/jobs/${jobId}/result/text`);
+          resultText.textContent = await textResponse.text();
+          setMessage("转录完成。");
+        }
+
+        if (job.status === "failed") {
+          clearInterval(pollTimer);
+          pollTimer = null;
+          submitButton.disabled = false;
+          setMessage(job.error || "转录失败。", true);
+        }
+
+        if (job.status === "queued" || job.status === "running") {
+          clearInterval(pollTimer);
+          pollTimer = setInterval(() => pollJob(jobId).catch((error) => setMessage(error.message, true)), pollIntervalMs);
+        }
+      }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (!fileInput.files.length) {
+          setMessage("请选择至少一个音频文件。", true);
+          return;
+        }
+
+        clearInterval(pollTimer);
+        submitButton.disabled = true;
+        downloadLink.hidden = true;
+        resultText.textContent = "任务已提交，等待转录完成...";
+        statusText.textContent = "uploading";
+        progress.value = 0;
+        progressText.textContent = "0%";
+        elapsedText.textContent = "耗时：-";
+        currentStepText.textContent = "当前步骤：上传文件";
+        setMessage("正在上传文件...");
+
+        try {
+          const body = new FormData();
+          for (const file of fileInput.files) {
+            body.append("files", file);
+          }
+
+          const response = await fetch("/transcriptions", { method: "POST", body });
+          if (!response.ok) {
+            throw new Error(await response.text());
+          }
+
+          const payload = await response.json();
+          jobIdLabel.textContent = `job_id: ${payload.job_id}`;
+          rememberJob(payload.job_id, fileInput.files);
+          setMessage("上传完成，正在转录...");
+          await pollJob(payload.job_id);
+        } catch (error) {
+          submitButton.disabled = false;
+          setMessage(error.message || "上传失败。", true);
+        }
+      });
+
+      renderHistory();
+    </script>
+  </body>
+</html>

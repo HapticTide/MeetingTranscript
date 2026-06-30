@@ -1,7 +1,7 @@
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from app.models import TranscriptSegment
 
@@ -38,15 +38,33 @@ class TranscriptionPipeline:
         self.min_speakers = min_speakers
         self.max_speakers = max_speakers
 
-    def transcribe(self, audio_path: Path) -> List[TranscriptSegment]:
+    def transcribe(
+        self,
+        audio_path: Path,
+        progress_callback: Optional[Callable[[str, int], None]] = None,
+    ) -> List[TranscriptSegment]:
         if self.asr_backend == "mock":
+            self._report_progress(progress_callback, "transcribing_audio", 50)
             return self._mock_transcribe(audio_path)
         if self.asr_backend == "mlx_whisper":
+            self._report_progress(progress_callback, "normalizing_audio", 10)
             with self._normalized_audio(audio_path) as normalized_audio:
+                self._report_progress(progress_callback, "transcribing_audio", 35)
                 asr_segments = self._transcribe_with_mlx_whisper(normalized_audio)
+                self._report_progress(progress_callback, "diarizing_speakers", 70)
                 speaker_segments = self._diarize(normalized_audio)
+            self._report_progress(progress_callback, "assigning_speakers", 85)
             return self._assign_speakers(asr_segments, speaker_segments)
         raise NotImplementedError(f"Unsupported ASR backend: {self.asr_backend}")
+
+    @staticmethod
+    def _report_progress(
+        progress_callback: Optional[Callable[[str, int], None]],
+        stage: str,
+        progress: int,
+    ) -> None:
+        if progress_callback is not None:
+            progress_callback(stage, progress)
 
     def _mock_transcribe(self, audio_path: Path) -> List[TranscriptSegment]:
         return [
@@ -178,6 +196,10 @@ class _FfmpegNormalizedAudio:
         subprocess.run(
             [
                 "ffmpeg",
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
                 "-y",
                 "-i",
                 str(self.audio_path),
@@ -188,6 +210,8 @@ class _FfmpegNormalizedAudio:
                 str(output_path),
             ],
             check=True,
+            capture_output=True,
+            text=True,
         )
         return output_path
 

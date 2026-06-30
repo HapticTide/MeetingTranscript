@@ -11,8 +11,11 @@ def test_non_wav_audio_is_normalized_with_ffmpeg(tmp_path: Path, monkeypatch):
 
     calls = []
 
-    def fake_run(command, check):
+    run_options = []
+
+    def fake_run(command, **kwargs):
         calls.append(command)
+        run_options.append(kwargs)
         Path(command[-1]).write_bytes(b"wav")
 
     fake_mlx = types.SimpleNamespace(
@@ -27,11 +30,17 @@ def test_non_wav_audio_is_normalized_with_ffmpeg(tmp_path: Path, monkeypatch):
         asr_backend="mlx_whisper",
         diarization_backend="none",
     )
+    progress_events = []
 
-    segments = pipeline.transcribe(audio_path)
+    segments = pipeline.transcribe(audio_path, progress_callback=lambda stage, progress: progress_events.append((stage, progress)))
 
-    assert calls[0][:4] == ["ffmpeg", "-y", "-i", str(audio_path)]
-    assert calls[0][4:8] == ["-ac", "1", "-ar", "16000"]
+    assert calls[0][:6] == ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y"]
+    assert calls[0][6:8] == ["-i", str(audio_path)]
+    assert calls[0][8:12] == ["-ac", "1", "-ar", "16000"]
+    assert run_options[0]["check"] is True
+    assert run_options[0]["capture_output"] is True
+    assert run_options[0]["text"] is True
+    assert progress_events[:2] == [("normalizing_audio", 10), ("transcribing_audio", 35)]
     assert segments[0].text == ".wav"
 
 

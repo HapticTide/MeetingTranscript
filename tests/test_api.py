@@ -14,6 +14,26 @@ def test_health_returns_service_status(tmp_path: Path):
     assert response.json() == {"status": "ok"}
 
 
+def test_root_serves_upload_page(tmp_path: Path):
+    client = TestClient(create_app(data_dir=tmp_path, asr_backend="mock", diarization_backend="mock"))
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert "Meeting Transcript" in response.text
+    assert "历史任务" in response.text
+    assert "清空历史" not in response.text
+    assert 'class="layout"' in response.text
+    assert 'class="sidebar panel"' in response.text
+    assert "耗时" in response.text
+    assert "elapsedText" in response.text
+    assert "当前步骤" in response.text
+    assert "currentStepText" in response.text
+    assert "pollIntervalMs = 1000" in response.text
+    assert "localStorage" in response.text
+
+
 def test_create_app_passes_diarization_settings_to_pipeline(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("MEETING_TRANSCRIPT_ASR_BACKEND", "mlx_whisper")
     monkeypatch.setenv("MEETING_TRANSCRIPT_DIARIZATION_BACKEND", "pyannote")
@@ -82,12 +102,21 @@ def test_auto_process_completes_job_and_exposes_results(tmp_path: Path):
     job = client.get(f"/jobs/{job_id}").json()
     assert job["status"] == "completed"
     assert job["progress"] == 100
+    assert job["started_at"] is not None
+    assert job["completed_at"] is not None
+    assert job["elapsed_seconds"] is not None
+    assert job["elapsed_seconds"] >= 0
     assert job["files"][0]["status"] == "completed"
 
     result = client.get(f"/jobs/{job_id}/result")
     assert result.status_code == 200
     assert result.json()["job_id"] == job_id
+    assert result.json()["elapsed_seconds"] == job["elapsed_seconds"]
     assert result.json()["files"][0]["outputs"]["markdown"].endswith("meeting.md")
+
+    text_result = client.get(f"/jobs/{job_id}/result/text")
+    assert text_result.status_code == 200
+    assert "Mock transcript for meeting.wav." in text_result.text
 
     zip_result = client.get(f"/jobs/{job_id}/result.zip")
     assert zip_result.status_code == 200

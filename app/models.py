@@ -48,6 +48,10 @@ class Job(BaseModel):
     stage: str = "queued"
     progress: int = 0
     total_files: int
+    created_at: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    elapsed_seconds: Optional[float] = None
     current_file: Optional[str] = None
     error: Optional[str] = None
     files: List[JobFile]
@@ -61,5 +65,6 @@ class CreateJobResponse(BaseModel):
 
 class JobResult(BaseModel):
     job_id: str
+    elapsed_seconds: Optional[float] = None
     files: List[JobFile]
     artifacts: Dict[str, str]
